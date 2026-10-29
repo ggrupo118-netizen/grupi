@@ -1,0 +1,6 @@
+{
+  "name": "TornoMaint - Gestão de Manutenção",
+  "description": "Sistema PCM industrial para gestão de manutenção preventiva, corretiva, controle de custos, relatórios e indicadores de confiabilidade MTBF e MTTR de tornos mecânicos.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
