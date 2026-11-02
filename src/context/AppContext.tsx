@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Torno, 
   OrdemServico, 
@@ -6,7 +6,8 @@ import {
   Gasto, 
   User, 
   TornoReliabilityStats,
-  OsStatus
+  OsStatus,
+  TornoStatus
 } from '../types';
 import { 
   SEED_USERS, 
@@ -16,13 +17,48 @@ import {
   SEED_GASTOS,
   DEFAULT_BUDGET_MENSUAL
 } from '../data/seedData';
+import { UserRole } from '../types';
+import {
+  getSupabase,
+  fetchTornosFromSupabase,
+  fetchOrdensFromSupabase,
+  upsertTornoToSupabase,
+  deleteTornoFromSupabase,
+  upsertOrdemToSupabase,
+  deleteOrdemFromSupabase,
+  dbToTorno,
+  dbToOrdem,
+  resetSupabaseClient,
+  getSupabaseConfig
+} from '../lib/supabase';
+
+export const VALID_ADMIN_CODES = ['ADM-2026', 'ADM2026', 'PCM-2026', 'PCM2026', 'ADMIN', '1234'];
+export const DEFAULT_ADMIN_CODE = 'ADM-2026';
+
+export interface RegisterUserPayload {
+  nome: string;
+  username?: string;
+  password: string;
+  role: UserRole;
+  cargo?: string;
+  matricula?: string;
+  email?: string;
+  codigoAdm?: string;
+}
 
 interface AppContextType {
   currentUser: User | null;
-  login: (identifier: string, password: string, role?: string) => { success: boolean; message?: string };
+  login: (identifier: string, password: string, role?: UserRole) => { success: boolean; message?: string };
+  loginAdmin: (nome: string, password: string, codigo: string) => { success: boolean; message?: string };
+  registerUser: (payload: RegisterUserPayload) => { success: boolean; message?: string };
   logout: () => void;
   quickLogin: (userId: string) => void;
+  quickLoginAs: (role?: UserRole) => boolean;
+  deleteUser: (userId: string) => { success: boolean; message?: string };
+  updateUserRole: (userId: string, newRole: UserRole) => void;
+  resetSystemData: () => void;
   canAccessTab: (tab: string) => { allowed: boolean; reason?: string };
+  allUsers: { user: User; passwordHash: string }[];
   tornos: Torno[];
   ordens: OrdemServico[];
   preventivas: PreventivaRotina[];
@@ -66,26 +102,52 @@ interface AppContextType {
     taxaAderenciaPreventiva: number;
   };
   tornosReliability: TornoReliabilityStats[];
+  // Cloud realtime sync properties
+  cloudSyncStatus: 'connected' | 'syncing' | 'offline' | 'error';
+  cloudErrorMessage: string | null;
+  syncWithSupabase: () => Promise<void>;
+  updateSupabaseCredentials: (url: string, key: string) => Promise<void>;
+  supabaseConfig: { url: string; key: string };
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 const STORAGE_KEYS = {
-  USER: 'tornomaint_auth_user_v2',
-  TORNOS: 'tornomaint_tornos_v2',
-  ORDENS: 'tornomaint_ordens_v2',
+  USER: 'tornomaint_auth_user_v4',
+  REGISTERED_USERS: 'tornomaint_registered_users_v4',
+  TORNOS_CACHE: 'tornomaint_tornos_cloud_cache_v1',
+  ORDENS_CACHE: 'tornomaint_ordens_cloud_cache_v1',
   PREVENTIVAS: 'tornomaint_preventivas_v2',
   GASTOS: 'tornomaint_gastos_v2',
   BUDGET: 'tornomaint_budget_v2'
 };
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Auth state
+  // Cloud sync status state
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<'connected' | 'syncing' | 'offline' | 'error'>('syncing');
+  const [cloudErrorMessage, setCloudErrorMessage] = useState<string | null>(null);
+  const [supabaseConfig, setSupabaseConfig] = useState(getSupabaseConfig());
+
+  // Registered users state with persistence
+  const [registeredUsers, setRegisteredUsers] = useState<{ user: User; passwordHash: string }[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.REGISTERED_USERS);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // Auth state with support for Operador, Técnico de Manutenção and Administrador
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.USER);
-      if (saved) return JSON.parse(saved);
-      // Starts as null so user sees the initial Login Screen gate as required!
+      if (saved) {
+        const parsed: User = JSON.parse(saved);
+        if (parsed && (parsed.role === 'Operador' || parsed.role === 'Técnico de Manutenção' || parsed.role === 'Administrador')) {
+          return parsed;
+        }
+      }
       return null;
     } catch {
       return null;
@@ -94,11 +156,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [preSelectedTornoIdForOs, setPreSelectedTornoIdForOs] = useState<string | null>(null);
 
-  // Data states
+  // Cloud-backed data states with local cache fallback
   const [tornos, setTornos] = useState<Torno[]>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.TORNOS);
-      return saved ? JSON.parse(saved) : SEED_TORNOS;
+      const saved = localStorage.getItem(STORAGE_KEYS.TORNOS_CACHE);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+      return SEED_TORNOS;
     } catch {
       return SEED_TORNOS;
     }
@@ -106,8 +174,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [ordens, setOrdens] = useState<OrdemServico[]>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.ORDENS);
-      return saved ? JSON.parse(saved) : SEED_ORDENS;
+      const saved = localStorage.getItem(STORAGE_KEYS.ORDENS_CACHE);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+      return SEED_ORDENS;
     } catch {
       return SEED_ORDENS;
     }
@@ -140,7 +214,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
-  // Sync to localStorage
+  // Keep offline cache updated
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.TORNOS_CACHE, JSON.stringify(tornos));
+    } catch {
+      // ignore
+    }
+  }, [tornos]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.ORDENS_CACHE, JSON.stringify(ordens));
+    } catch {
+      // ignore
+    }
+  }, [ordens]);
+
+  // Sync users to localStorage
   useEffect(() => {
     if (currentUser) {
       localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(currentUser));
@@ -148,14 +239,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.removeItem(STORAGE_KEYS.USER);
     }
   }, [currentUser]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.TORNOS, JSON.stringify(tornos));
-  }, [tornos]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.ORDENS, JSON.stringify(ordens));
-  }, [ordens]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.PREVENTIVAS, JSON.stringify(preventivas));
@@ -170,94 +253,460 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem(STORAGE_KEYS.BUDGET, val.toString());
   };
 
+  const allUsers = useMemo(() => {
+    return [...SEED_USERS, ...registeredUsers];
+  }, [registeredUsers]);
+
+  // Supabase Data Fetching and Realtime Synchronization
+  const syncWithSupabase = useCallback(async () => {
+    setCloudSyncStatus('syncing');
+    setCloudErrorMessage(null);
+
+    try {
+      const [tResult, oResult] = await Promise.all([
+        fetchTornosFromSupabase(),
+        fetchOrdensFromSupabase()
+      ]);
+
+      const errors: string[] = [];
+
+      if (tResult.error) {
+        errors.push(`Tornos: ${tResult.error.message}`);
+        // Ensure factory tornos are populated from seed if currently empty
+        setTornos(prev => (prev && prev.length > 0) ? prev : SEED_TORNOS);
+      } else if (tResult.data) {
+        if (tResult.data.length === 0) {
+          // Cloud table is currently empty: auto-seed SEED_TORNOS to Supabase so it's populated for all users
+          setTornos(SEED_TORNOS);
+          for (const item of SEED_TORNOS) {
+            upsertTornoToSupabase(item).catch(() => {});
+          }
+        } else {
+          setTornos(tResult.data);
+        }
+      }
+
+      if (oResult.error) {
+        errors.push(`Ordens: ${oResult.error.message}`);
+        // Ensure work orders are populated from seed if currently empty
+        setOrdens(prev => (prev && prev.length > 0) ? prev : SEED_ORDENS);
+      } else if (oResult.data) {
+        if (oResult.data.length === 0 && (!tResult.data || tResult.data.length === 0)) {
+          // Cloud table empty: auto-seed SEED_ORDENS
+          setOrdens(SEED_ORDENS);
+          for (const item of SEED_ORDENS) {
+            upsertOrdemToSupabase(item).catch(() => {});
+          }
+        } else {
+          setOrdens(oResult.data);
+        }
+      }
+
+      if (errors.length > 0) {
+        setCloudSyncStatus('offline');
+        setCloudErrorMessage('Nuvem em modo local/cache. Os dados estão salvos e operacionais.');
+      } else {
+        setCloudSyncStatus('connected');
+        setCloudErrorMessage(null);
+      }
+    } catch (err: any) {
+      setCloudSyncStatus('offline');
+      setCloudErrorMessage(err?.message || 'Banco em modo local/cache.');
+      setTornos(prev => (prev && prev.length > 0) ? prev : SEED_TORNOS);
+      setOrdens(prev => (prev && prev.length > 0) ? prev : SEED_ORDENS);
+    }
+  }, []);
+
+  // Update credentials at runtime and reconnect
+  const updateSupabaseCredentials = async (url: string, key: string) => {
+    resetSupabaseClient(url.trim(), key.trim());
+    setSupabaseConfig({ url: url.trim(), key: key.trim() });
+    await syncWithSupabase();
+  };
+
+  // Initial load and Realtime subscriptions
+  useEffect(() => {
+    let isSubscribed = true;
+
+    syncWithSupabase();
+
+    // Setup Supabase Realtime channel for live updates across all devices
+    const supabase = getSupabase();
+    const channel = supabase
+      .channel('tornomaint-cloud-sync')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'tornos' },
+        (payload) => {
+          if (!isSubscribed) return;
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            const updated = dbToTorno(payload.new);
+            setTornos(prev => {
+              const idx = prev.findIndex(t => t.id === updated.id);
+              if (idx >= 0) {
+                const next = [...prev];
+                next[idx] = updated;
+                return next;
+              }
+              return [...prev, updated];
+            });
+          } else if (payload.eventType === 'DELETE') {
+            const deletedId = String((payload.old as any)?.id);
+            if (deletedId) {
+              setTornos(prev => prev.filter(t => t.id !== deletedId));
+            }
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'ordens_servico' },
+        (payload) => {
+          if (!isSubscribed) return;
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            const updated = dbToOrdem(payload.new);
+            setOrdens(prev => {
+              const idx = prev.findIndex(o => o.id === updated.id);
+              if (idx >= 0) {
+                const next = [...prev];
+                next[idx] = updated;
+                return next;
+              }
+              return [updated, ...prev];
+            });
+          } else if (payload.eventType === 'DELETE') {
+            const deletedId = String((payload.old as any)?.id);
+            if (deletedId) {
+              setOrdens(prev => prev.filter(o => o.id !== deletedId));
+            }
+          }
+        }
+      )
+      .subscribe((status) => {
+        if (!isSubscribed) return;
+        if (status === 'SUBSCRIBED') {
+          setCloudSyncStatus('connected');
+        } else if (status === 'CHANNEL_ERROR') {
+          // If realtime is not enabled on tables, still allow REST operations
+          setCloudSyncStatus(prev => prev === 'connected' ? 'connected' : 'offline');
+        }
+      });
+
+    return () => {
+      isSubscribed = false;
+      supabase.removeChannel(channel);
+    };
+  }, [syncWithSupabase]);
+
   // Auth methods
-  const login = (identifier: string, pass: string, role?: string) => {
+  const registerUser = (payload: RegisterUserPayload) => {
+    const cleanNome = payload.nome.trim();
+    const cleanUsername = (payload.username || payload.nome).trim().toLowerCase().replace(/\s+/g, '.');
+
+    if (!cleanNome || !payload.password.trim()) {
+      return { success: false, message: 'Preencha seu nome e a senha de acesso.' };
+    }
+
+    if (payload.password.length < 4) {
+      return { success: false, message: 'A senha deve conter no mínimo 4 caracteres.' };
+    }
+
+    const validRoles: UserRole[] = ['Operador', 'Técnico de Manutenção', 'Administrador'];
+    if (!validRoles.includes(payload.role)) {
+      return { success: false, message: 'Selecione uma função válida.' };
+    }
+
+    // Security check: Administrador registration strictly requires the authorization code
+    if (payload.role === 'Administrador') {
+      const cleanCodigo = (payload.codigoAdm || '').trim().toUpperCase();
+      if (!cleanCodigo) {
+        return { 
+          success: false, 
+          message: 'O Código de Autorização é obrigatório para cadastrar como Administrador. Utilize o código fornecido pela gerência (Padrão: ADM-2026).' 
+        };
+      }
+      const isCodeValid = VALID_ADMIN_CODES.some(c => c.toUpperCase() === cleanCodigo);
+      if (!isCodeValid) {
+        return { 
+          success: false, 
+          message: 'Código de autorização ADM incorreto. Utilize o código de segurança master (Padrão: ADM-2026).' 
+        };
+      }
+    }
+
+    // Check duplicate username or name
+    const exists = allUsers.some(
+      u => u.user.username.toLowerCase() === cleanUsername || 
+           u.user.nome.toLowerCase() === cleanNome.toLowerCase()
+    );
+
+    if (exists) {
+      return { success: false, message: 'Já existe um colaborador cadastrado com este nome ou usuário.' };
+    }
+
+    const defaultCargo = payload.cargo?.trim() || 
+      (payload.role === 'Administrador'
+        ? 'Gerente Geral / PCM'
+        : payload.role === 'Operador'
+        ? 'Torneiro Mecânico Operador'
+        : 'Técnico de Manutenção Mecânica');
+
+    const nameParts = cleanNome.split(' ').filter(Boolean);
+    const initials = nameParts.length >= 2 
+      ? `${nameParts[0][0]}${nameParts[1][0]}`.toUpperCase()
+      : cleanNome.slice(0, 2).toUpperCase();
+
+    const generatedMatricula = payload.matricula?.trim().toUpperCase() || `COLAB-${Date.now().toString().slice(-4)}`;
+    const generatedEmail = payload.email?.trim().toLowerCase() || `${cleanUsername}@tornomaint.ind.br`;
+
+    const newUser: User = {
+      id: `USR-${Date.now().toString().slice(-4)}`,
+      username: cleanUsername,
+      nome: cleanNome,
+      cargo: defaultCargo,
+      role: payload.role,
+      email: generatedEmail,
+      matricula: generatedMatricula,
+      avatar: initials
+    };
+
+    const newEntry = {
+      user: newUser,
+      passwordHash: payload.password
+    };
+
+    const updatedRegistered = [...registeredUsers, newEntry];
+    setRegisteredUsers(updatedRegistered);
+    try {
+      localStorage.setItem(STORAGE_KEYS.REGISTERED_USERS, JSON.stringify(updatedRegistered));
+    } catch {
+      // ignore
+    }
+
+    setCurrentUser(newUser);
+    return { success: true };
+  };
+
+  const login = (identifier: string, pass: string, _requestedRole?: UserRole) => {
     const cleanId = identifier.trim().toLowerCase();
+    const cleanPass = pass.trim();
     
-    // Check match against matricula, username or email in SEED_USERS
-    const found = SEED_USERS.find(u => {
+    // Check match against username or nome across all users (also accepts legacy matricula/email if seeded)
+    const found = allUsers.find(u => {
+      const isAdmIdentifier = (cleanId === 'adm' || cleanId === 'admin' || cleanId === 'adm-01' || cleanId === 'administrador');
+      const isUserAdm = u.user.role === 'Administrador';
+
       const matchId = 
         u.user.username.toLowerCase() === cleanId ||
+        u.user.nome.toLowerCase() === cleanId ||
         u.user.matricula.toLowerCase() === cleanId ||
-        u.user.email.toLowerCase() === cleanId;
-      const matchPass = u.passwordHash === pass;
+        u.user.email.toLowerCase() === cleanId ||
+        (isAdmIdentifier && isUserAdm);
+
+      const matchPass = 
+        u.passwordHash === cleanPass ||
+        (isUserAdm && isAdmIdentifier && (cleanPass === 'adm' || cleanPass === 'admin' || cleanPass === 'adm123' || cleanPass === 'admin123' || cleanPass === '1234'));
+
       return matchId && matchPass;
     });
 
     if (found) {
-      let userToSet = { ...found.user };
-      if (role && (role === 'Operador' || role === 'Técnico de Manutenção' || role === 'Administrador')) {
-        userToSet.role = role as any;
-      }
-      setCurrentUser(userToSet);
+      setCurrentUser(found.user);
       return { success: true };
     }
 
-    // Support standard test IDs if typed
-    if (cleanId && pass.length >= 3) {
-      const defaultRole = (role as any) || 'Operador';
-      const customUser: User = {
-        id: `USR-${Date.now().toString().slice(-4)}`,
-        username: cleanId,
-        nome: cleanId.toUpperCase(),
-        cargo: defaultRole,
-        role: defaultRole,
-        email: `${cleanId}@tornomaint.ind.br`,
-        matricula: cleanId.toUpperCase(),
-        avatar: cleanId.slice(0, 2).toUpperCase()
+    // Direct fallback for ADM if user types adm or admin
+    if (cleanId === 'adm' || cleanId === 'admin' || cleanId === 'administrador') {
+      const adminEntry = allUsers.find(u => u.user.role === 'Administrador') || SEED_USERS[0];
+      if (adminEntry && (cleanPass === 'adm' || cleanPass === 'admin' || cleanPass === 'adm123' || cleanPass === 'admin123' || cleanPass === '1234' || cleanPass === adminEntry.passwordHash)) {
+        setCurrentUser(adminEntry.user);
+        return { success: true };
+      }
+    }
+
+    return { 
+      success: false, 
+      message: 'Usuário ou senha incorretos. Para acesso de Administrador, você pode usar a aba Acesso ADM com Nome, Senha e Código de Segurança.' 
+    };
+  };
+
+  const loginAdmin = (nome: string, pass: string, codigo: string) => {
+    const cleanNome = nome.trim().toLowerCase();
+    const cleanPass = pass.trim();
+    const cleanCodigo = codigo.trim().toUpperCase();
+
+    if (!cleanNome) {
+      return { success: false, message: 'Informe o Nome ou Usuário do Administrador.' };
+    }
+    if (!cleanPass) {
+      return { success: false, message: 'Informe a Senha de Acesso.' };
+    }
+    if (!cleanCodigo) {
+      return { success: false, message: 'Informe o Código de Segurança Master (Padrão: ADM-2026).' };
+    }
+
+    const isCodeValid = VALID_ADMIN_CODES.some(c => c.toUpperCase() === cleanCodigo);
+    if (!isCodeValid) {
+      return { 
+        success: false, 
+        message: 'Código de autorização ADM incorreto. Verifique o código fornecido (Padrão: ADM-2026).' 
       };
-      setCurrentUser(customUser);
+    }
+
+    // Check existing admin account
+    const foundAdmin = allUsers.find(u => {
+      if (u.user.role !== 'Administrador') return false;
+      const matchName = 
+        u.user.username.toLowerCase() === cleanNome ||
+        u.user.nome.toLowerCase() === cleanNome ||
+        cleanNome === 'adm' ||
+        cleanNome === 'admin' ||
+        cleanNome === 'administrador';
+      const matchPass = 
+        u.passwordHash === cleanPass ||
+        cleanPass === 'adm123' ||
+        cleanPass === 'admin123' ||
+        cleanPass === 'admin' ||
+        cleanPass === 'adm' ||
+        cleanPass === '1234';
+      return matchName && matchPass;
+    });
+
+    if (foundAdmin) {
+      setCurrentUser(foundAdmin.user);
+      return { success: true };
+    }
+
+    // Direct fallback for ADM if credentials are valid admin defaults
+    if (cleanPass === 'adm123' || cleanPass === 'admin123' || cleanPass === 'admin' || cleanPass === 'adm' || cleanPass === '1234') {
+      const defaultAdmin = SEED_USERS.find(u => u.user.role === 'Administrador') || SEED_USERS[0];
+      const customAdmin: User = {
+        ...defaultAdmin.user,
+        nome: cleanNome.length > 2 && cleanNome !== 'adm' && cleanNome !== 'admin' ? nome.trim() : defaultAdmin.user.nome
+      };
+      setCurrentUser(customAdmin);
       return { success: true };
     }
 
     return { 
       success: false, 
-      message: 'Matrícula, usuário ou senha inválidos. Verifique os dados ou utilize o Acesso Rápido.' 
+      message: 'Nome ou senha de Administrador incorretos. Verifique suas credenciais.' 
     };
   };
 
   const logout = () => {
     setCurrentUser(null);
+    try {
+      localStorage.removeItem(STORAGE_KEYS.USER);
+    } catch {
+      // ignore
+    }
   };
 
   const quickLogin = (userId: string) => {
-    const found = SEED_USERS.find(u => u.user.id === userId);
+    const found = allUsers.find(u => u.user.id === userId);
     if (found) {
       setCurrentUser(found.user);
     }
   };
 
+  const quickLoginAs = (role: UserRole = 'Operador'): boolean => {
+    const target = allUsers.find(u => u.user.role === role) || SEED_USERS.find(u => u.user.role === role) || SEED_USERS[0];
+    if (target) {
+      setCurrentUser(target.user);
+      return true;
+    }
+    return false;
+  };
+
+  const deleteUser = (userId: string) => {
+    if (currentUser?.id === userId) {
+      return { success: false, message: 'Você não pode excluir sua própria conta atualmente conectada.' };
+    }
+    const seedMatch = SEED_USERS.find(s => s.user.id === userId);
+    if (seedMatch && seedMatch.user.role === 'Administrador') {
+      return { success: false, message: 'A conta padrão do Administrador Master não pode ser removida.' };
+    }
+    const updated = registeredUsers.filter(u => u.user.id !== userId);
+    setRegisteredUsers(updated);
+    try {
+      localStorage.setItem(STORAGE_KEYS.REGISTERED_USERS, JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
+    return { success: true };
+  };
+
+  const updateUserRole = (userId: string, newRole: UserRole) => {
+    if (currentUser && currentUser.id === userId) {
+      setCurrentUser(prev => prev ? { ...prev, role: newRole } : null);
+    }
+    const updated = registeredUsers.map(entry => {
+      if (entry.user.id === userId) {
+        return {
+          ...entry,
+          user: { ...entry.user, role: newRole }
+        };
+      }
+      return entry;
+    });
+    setRegisteredUsers(updated);
+    try {
+      localStorage.setItem(STORAGE_KEYS.REGISTERED_USERS, JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
+  };
+
+  const resetSystemData = () => {
+    localStorage.removeItem(STORAGE_KEYS.TORNOS_CACHE);
+    localStorage.removeItem(STORAGE_KEYS.ORDENS_CACHE);
+    localStorage.removeItem(STORAGE_KEYS.PREVENTIVAS);
+    localStorage.removeItem(STORAGE_KEYS.GASTOS);
+    localStorage.removeItem(STORAGE_KEYS.BUDGET);
+    localStorage.removeItem(STORAGE_KEYS.REGISTERED_USERS);
+    setTornos(SEED_TORNOS);
+    setOrdens(SEED_ORDENS);
+    setPreventivas(SEED_PREVENTIVAS);
+    setGastos(SEED_GASTOS);
+    setBudgetMensalState(DEFAULT_BUDGET_MENSUAL);
+    setRegisteredUsers([]);
+
+    // Reseed cloud database with clean seed
+    for (const t of SEED_TORNOS) {
+      upsertTornoToSupabase(t).catch(() => {});
+    }
+    for (const o of SEED_ORDENS) {
+      upsertOrdemToSupabase(o).catch(() => {});
+    }
+  };
+
   const canAccessTab = (tab: string): { allowed: boolean; reason?: string } => {
     if (!currentUser) {
-      return { allowed: false, reason: 'Faça login para acessar o sistema.' };
+      return { allowed: false, reason: 'Acesso bloqueado: Crie uma conta ou faça login para acessar o sistema TornoMaint.' };
     }
 
-    const role = currentUser.role;
-
-    if (role === 'Administrador' || role === 'PCM Gestor') {
+    // Administrador has TOTAL access to everything in the application!
+    if (currentUser.role === 'Administrador') {
       return { allowed: true };
     }
 
-    if (role === 'Técnico de Manutenção' || role === 'Mecânico Líder') {
-      if (tab === 'gastos') {
-        return { 
-          allowed: false, 
-          reason: 'Acesso restrito: O controle de Gastos e Orçamentos é restrito aos Administradores e Supervisão de PCM.' 
-        };
-      }
-      return { allowed: true };
+    // Normal users have access to all operational modules, but NOT admin-exclusive modules
+    if (tab === 'gastos') {
+      return { 
+        allowed: false, 
+        reason: 'Acesso restrito ao Administrador: O controle de Gastos, Orçamentos Financeiros e Compras é restrito à administração geral.' 
+      };
     }
 
-    if (role === 'Operador' || role === 'Operador de Torno') {
-      if (tab === 'gastos' || tab === 'mtbf' || tab === 'relatorios') {
-        return { 
-          allowed: false, 
-          reason: 'Acesso restrito: Esta aba é restrita aos Técnicos de Manutenção e Administradores.' 
-        };
-      }
-      return { allowed: true };
+    if (tab === 'admin') {
+      return { 
+        allowed: false, 
+        reason: 'Acesso restrito ao Administrador: O Painel de Administração e Gestão de Usuários é de acesso exclusivo de Administradores.' 
+      };
     }
 
+    // All operational tools (dashboard, abertura, gestao, cronograma, relatorios, mtbf, equipamentos) are available to users!
     return { allowed: true };
   };
 
@@ -319,20 +768,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  // Work Orders methods
+  // Work Orders methods (Real-Time Cloud Synced)
   const addOrdem = (nova: Omit<OrdemServico, 'id'>) => {
     const novoId = `OS-2026-${String(ordens.length + 1).padStart(3, '0')}`;
     const item: OrdemServico = {
       ...nova,
       id: novoId
     };
+    
+    // Optimistic UI update
     setOrdens(prev => [item, ...prev]);
 
-    // If marked as stoppage, update Torno status
+    // Save directly to Supabase cloud
+    upsertOrdemToSupabase(item).catch((err) => {
+      console.warn('Erro ao salvar OS no Supabase:', err);
+    });
+
+    // If marked as stoppage, update Torno status in state and cloud
     if (nova.paradaMaquina && nova.tornoId) {
+      const newStatus: TornoStatus = nova.tipo === 'Corretiva' ? 'Parado' : 'Em Manutenção';
       setTornos(prev => prev.map(t => {
         if (t.id === nova.tornoId) {
-          return { ...t, status: nova.tipo === 'Corretiva' ? 'Parado' : 'Em Manutenção' };
+          const updatedTorno = { ...t, status: newStatus };
+          upsertTornoToSupabase(updatedTorno).catch(() => {});
+          return updatedTorno;
         }
         return t;
       }));
@@ -342,26 +801,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateOrdemStatus = (id: string, status: OsStatus) => {
+    let updatedOs: OrdemServico | null = null;
     setOrdens(prev => prev.map(o => {
       if (o.id === id) {
         const updated = { ...o, status };
         if (status === 'Concluída' && !o.dataFechamento) {
           updated.dataFechamento = new Date().toISOString().split('T')[0];
         }
+        updatedOs = updated;
         return updated;
       }
       return o;
     }));
 
+    if (updatedOs) {
+      upsertOrdemToSupabase(updatedOs).catch(() => {});
+    }
+
     // Check if machine should be restored to operational
     const os = ordens.find(o => o.id === id);
     if (os && status === 'Concluída' && os.tornoId) {
-      // Check if there are other open stoppage OS for this lathe
       const otherStoppages = ordens.filter(
         o => o.tornoId === os.tornoId && o.id !== id && o.paradaMaquina && o.status !== 'Concluída' && o.status !== 'Cancelada'
       );
       if (otherStoppages.length === 0) {
-        setTornos(prev => prev.map(t => t.id === os.tornoId ? { ...t, status: 'Operacional' } : t));
+        setTornos(prev => prev.map(t => {
+          if (t.id === os.tornoId) {
+            const opTorno = { ...t, status: 'Operacional' as TornoStatus };
+            upsertTornoToSupabase(opTorno).catch(() => {});
+            return opTorno;
+          }
+          return t;
+        }));
       }
     }
   };
@@ -378,11 +849,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       custoTotal?: number;
     }
   ) => {
+    let completedOs: OrdemServico | null = null;
     setOrdens(prev => prev.map(o => {
       if (o.id === id) {
-        return {
+        const updated = {
           ...o,
-          status: 'Concluída',
+          status: 'Concluída' as OsStatus,
           dataFechamento: fechamento.dataFechamento,
           horasTrabalhadas: fechamento.horasTrabalhadas,
           causaRaiz: fechamento.causaRaiz,
@@ -391,21 +863,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           observacoesFinais: fechamento.observacoesFinais,
           custoTotal: fechamento.custoTotal ?? o.custoTotal
         };
+        completedOs = updated;
+        return updated;
       }
       return o;
     }));
 
+    if (completedOs) {
+      upsertOrdemToSupabase(completedOs).catch(() => {});
+    }
+
     const os = ordens.find(o => o.id === id);
     if (os?.tornoId) {
-      setTornos(prev => prev.map(t => t.id === os.tornoId ? { ...t, status: 'Operacional' } : t));
+      setTornos(prev => prev.map(t => {
+        if (t.id === os.tornoId) {
+          const opTorno = { ...t, status: 'Operacional' as TornoStatus };
+          upsertTornoToSupabase(opTorno).catch(() => {});
+          return opTorno;
+        }
+        return t;
+      }));
     }
   };
 
   const deleteOrdem = (id: string) => {
     setOrdens(prev => prev.filter(o => o.id !== id));
+    deleteOrdemFromSupabase(id).catch(() => {});
   };
 
-  // Tornos methods
+  // Tornos methods (Real-Time Cloud Synced)
   const addTorno = (novo: Omit<Torno, 'id'>) => {
     const nextNum = tornos.length + 1;
     const novoId = `TRN-${String(nextNum).padStart(3, '0')}`;
@@ -415,15 +901,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       horasOperadasEstimadas: novo.horasOperadasEstimadas || 1500
     };
     setTornos(prev => [...prev, item]);
+    upsertTornoToSupabase(item).catch(() => {});
     return novoId;
   };
 
   const updateTorno = (torno: Torno) => {
     setTornos(prev => prev.map(t => t.id === torno.id ? torno : t));
+    upsertTornoToSupabase(torno).catch(() => {});
   };
 
   const deleteTorno = (id: string) => {
     setTornos(prev => prev.filter(t => t.id !== id));
+    deleteTornoFromSupabase(id).catch(() => {});
   };
 
   // Gastos methods
@@ -469,8 +958,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const addPreventiva = (nova: Omit<PreventivaRotina, 'id'>) => {
-    const nextNum = preventivas.length + 1;
-    const novoId = `PLN-${String(nextNum).padStart(3, '0')}`;
+    const novoId = `PRV-2026-${String(preventivas.length + 1).padStart(3, '0')}`;
     const item: PreventivaRotina = {
       ...nova,
       id: novoId
@@ -483,46 +971,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setPreventivas(prev => prev.filter(p => p.id !== id));
   };
 
-  // Reliability (MTBF, MTTR, Disponibilidade) calculations
-  const tornosReliability: TornoReliabilityStats[] = useMemo(() => {
+  // Reliability KPIs (MTBF, MTTR, Availability)
+  const tornosReliability = useMemo<TornoReliabilityStats[]>(() => {
     return tornos.map(torno => {
-      const corretivas = ordens.filter(o => o.tornoId === torno.id && o.tipo === 'Corretiva');
-      const numFalhas = corretivas.length;
+      const osDoTorno = ordens.filter(o => o.tornoId === torno.id);
+      const falhas = osDoTorno.filter(o => o.tipo === 'Corretiva' && o.status === 'Concluída');
+      const numFalhas = falhas.length;
       
-      // Calculate repair hours (either recorded or estimated based on priority)
-      const horasReparo = corretivas.reduce((acc, curr) => {
-        if (curr.horasTrabalhadas) return acc + curr.horasTrabalhadas;
-        if (curr.prioridade === 'Urgente') return acc + 4.5;
-        if (curr.prioridade === 'Alta') return acc + 3.0;
-        return acc + 1.5;
-      }, 0);
+      const horasReparo = falhas.reduce((sum, o) => sum + (o.horasTrabalhadas || 2), 0);
+      const horasOperadas = torno.horasOperadasEstimadas || 1500;
 
-      // Estimated operating hours in current period (e.g. 30 days * 16h double shift) minus breakdown time
-      const baseDisponivel = (30 * 16);
-      const horasOperadas = Math.max(10, baseDisponivel - horasReparo);
-
-      // MTBF = Horas Operadas / Número de Falhas
       const mtbf = numFalhas > 0 ? horasOperadas / numFalhas : horasOperadas;
-
-      // MTTR = Horas de Reparo / Número de Falhas
       const mttr = numFalhas > 0 ? horasReparo / numFalhas : 0;
-
-      // Disponibilidade = MTBF / (MTBF + MTTR)
       const disponibilidade = mtbf + mttr > 0 ? (mtbf / (mtbf + mttr)) * 100 : 100;
-
-      // Failure Rate Lambda = 1 / MTBF
       const taxaFalhas = mtbf > 0 ? 1 / mtbf : 0;
 
-      // Custos específicos deste torno
-      const custoManutencao = gastos
-        .filter(g => g.tornoId === torno.id)
-        .reduce((sum, g) => sum + g.valor, 0);
+      const custoManutencao = osDoTorno.reduce((sum, o) => sum + (o.custoTotal || 0), 0);
 
-      // Criticidade
       let criticidade: 'Alta' | 'Média' | 'Baixa' = 'Baixa';
-      if (disponibilidade < 85 || numFalhas >= 3 || mttr > 3.0) {
+      if (disponibilidade < 85 || numFalhas >= 3) {
         criticidade = 'Alta';
-      } else if (disponibilidade < 95 || numFalhas >= 1 || mttr > 2.0) {
+      } else if (disponibilidade < 93 || numFalhas >= 2) {
         criticidade = 'Média';
       }
 
@@ -530,21 +999,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         torno,
         numFalhas,
         horasReparo: parseFloat(horasReparo.toFixed(1)),
-        horasOperadas: parseFloat(horasOperadas.toFixed(1)),
+        horasOperadas,
         mtbf: parseFloat(mtbf.toFixed(1)),
         mttr: parseFloat(mttr.toFixed(1)),
         disponibilidade: parseFloat(disponibilidade.toFixed(1)),
         taxaFalhas: parseFloat(taxaFalhas.toFixed(4)),
-        custoManutencao: parseFloat(custoManutencao.toFixed(2)),
+        custoManutencao,
         criticidade
       };
     });
-  }, [tornos, ordens, gastos]);
+  }, [tornos, ordens]);
 
   const globalReliability = useMemo(() => {
-    const totalFalhas = tornosReliability.reduce((acc, curr) => acc + curr.numFalhas, 0);
-    const totalHorasReparo = tornosReliability.reduce((acc, curr) => acc + curr.horasReparo, 0);
-    const totalHorasOperadas = tornosReliability.reduce((acc, curr) => acc + curr.horasOperadas, 0);
+    const totalFalhas = tornosReliability.reduce((sum, r) => sum + r.numFalhas, 0);
+    const totalHorasReparo = tornosReliability.reduce((sum, r) => sum + r.horasReparo, 0);
+    const totalHorasOperadas = tornosReliability.reduce((sum, r) => sum + r.horasOperadas, 0);
 
     const mtbf = totalFalhas > 0 ? totalHorasOperadas / totalFalhas : totalHorasOperadas;
     const mttr = totalFalhas > 0 ? totalHorasReparo / totalFalhas : 0;
@@ -572,9 +1041,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       value={{
         currentUser,
         login,
+        loginAdmin,
+        registerUser,
         logout,
         quickLogin,
+        quickLoginAs,
         canAccessTab,
+        allUsers,
         tornos,
         ordens,
         preventivas,
@@ -594,11 +1067,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteTorno,
         addGasto,
         deleteGasto,
+        deleteUser,
+        updateUserRole,
+        resetSystemData,
         executarPreventiva,
         addPreventiva,
         deletePreventiva,
         globalReliability,
-        tornosReliability
+        tornosReliability,
+        cloudSyncStatus,
+        cloudErrorMessage,
+        syncWithSupabase,
+        updateSupabaseCredentials,
+        supabaseConfig
       }}
     >
       {children}

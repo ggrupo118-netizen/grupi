@@ -7,6 +7,7 @@ import { LoginScreen } from './components/LoginScreen';
 import { LoginModal } from './components/LoginModal';
 import { QrCodeScannerModal } from './components/QrCodeScannerModal';
 import { EquipamentoQrCardModal } from './components/EquipamentoQrCardModal';
+import { ShareAppModal } from './components/ShareAppModal';
 import { DashboardTab } from './components/DashboardTab';
 import { AberturaOsTab } from './components/AberturaOsTab';
 import { GestaoOsTab } from './components/GestaoOsTab';
@@ -15,19 +16,33 @@ import { GastosTab } from './components/GastosTab';
 import { RelatoriosTab } from './components/RelatoriosTab';
 import { MtbfMttrTab } from './components/MtbfMttrTab';
 import { EquipamentosTab } from './components/EquipamentosTab';
+import { AdminTab } from './components/AdminTab';
+import { OfflineIndicator } from './components/OfflineIndicator';
+import { MobileBottomNav } from './components/MobileBottomNav';
 import { Lock, AlertCircle, X } from 'lucide-react';
 
 const MainLayout: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [isQrScannerOpen, setIsQrScannerOpen] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [scannedTorno, setScannedTorno] = useState<Torno | null>(null);
   const [restrictedNotice, setRestrictedNotice] = useState<string | null>(null);
   const [urlScanError, setUrlScanError] = useState<string | null>(null);
 
-  const { currentUser, setPreSelectedTornoIdForOs, findTornoByQrCode, tornos } = useApp();
+  const { currentUser, setPreSelectedTornoIdForOs, findTornoByQrCode, tornos, canAccessTab } = useApp();
 
-  // Detect URL parameter (ex: ?id=TORNO-01 or ?id=TR-01) from physical QR Code scan
+  // Enforce RBAC tab restriction: redirect operator to dashboard if on forbidden tab
+  useEffect(() => {
+    if (currentUser) {
+      const access = canAccessTab(activeTab);
+      if (!access.allowed) {
+        setActiveTab('dashboard');
+      }
+    }
+  }, [currentUser, activeTab, canAccessTab]);
+
+  // Detect URL parameter (ex: ?id=TORNO-01 or ?id=TR-01) from physical QR Code scan or PWA shortcuts
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const urlParams = new URLSearchParams(window.location.search);
@@ -40,37 +55,25 @@ const MainLayout: React.FC = () => {
           setUrlScanError(`Equipamento com ID "${equipamentoId}" não encontrado no sistema TornoMaint.`);
         }
       }
+
+      // PWA Shortcuts & actions
+      const action = urlParams.get('action');
+      const tabParam = urlParams.get('tab');
+      if (action === 'new-os') {
+        setActiveTab('abertura');
+      } else if (tabParam === 'qrcode') {
+        setIsQrScannerOpen(true);
+      } else if (tabParam === 'inventario') {
+        setActiveTab('equipamentos');
+      }
     }
   }, [tornos, findTornoByQrCode]);
 
-  // If no user is logged in, show initial full-screen login gate, but keep QR modal available if deep-linked
+  // Mandatory Login Gate: absolutely no view of shop floor or equipment until logged in
   if (!currentUser) {
     return (
       <div className="bg-slate-100 min-h-screen text-slate-900">
-        {urlScanError && (
-          <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-rose-50 border border-rose-300 text-rose-800 p-3 rounded-xl text-xs flex items-center gap-2 max-w-md shadow-xl">
-            <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
-            <span>{urlScanError}</span>
-            <button onClick={() => setUrlScanError(null)} className="ml-auto text-rose-600 hover:text-rose-900">
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
-
         <LoginScreen />
-
-        {/* If scanned via URL, show the equipment info card modal even before login */}
-        {scannedTorno && (
-          <EquipamentoQrCardModal
-            torno={scannedTorno}
-            isOpen={true}
-            onClose={() => setScannedTorno(null)}
-            onOpenOsForTorno={(tornoId) => {
-              setPreSelectedTornoIdForOs(tornoId);
-              setScannedTorno(null);
-            }}
-          />
-        )}
       </div>
     );
   }
@@ -95,7 +98,10 @@ const MainLayout: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col font-sans selection:bg-amber-400 selection:text-slate-950">
+    <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col font-sans selection:bg-amber-400 selection:text-slate-950 w-full max-w-full overflow-x-hidden">
+      {/* Offline Connectivity Status Indicator */}
+      <OfflineIndicator />
+
       {/* URL scan error banner if any */}
       {urlScanError && (
         <div className="bg-rose-50 border-b border-rose-200 text-rose-800 px-4 py-2.5 text-xs flex items-center justify-between">
@@ -113,6 +119,7 @@ const MainLayout: React.FC = () => {
       <Header
         onOpenLogin={() => setIsLoginModalOpen(true)}
         onOpenQrScanner={() => setIsQrScannerOpen(true)}
+        onOpenShare={() => setIsShareModalOpen(true)}
       />
 
       {/* Navigation Bar in white */}
@@ -123,7 +130,7 @@ const MainLayout: React.FC = () => {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 pb-28 sm:pb-6">
         {activeTab === 'dashboard' && (
           <DashboardTab
             onNavigate={(tab) => setActiveTab(tab)}
@@ -165,6 +172,10 @@ const MainLayout: React.FC = () => {
         {activeTab === 'equipamentos' && (
           <EquipamentosTab />
         )}
+
+        {activeTab === 'admin' && (
+          <AdminTab />
+        )}
       </main>
 
       {/* Industrial Footer in white */}
@@ -183,6 +194,13 @@ const MainLayout: React.FC = () => {
           </div>
         </div>
       </footer>
+
+      {/* Touch-Friendly Bottom Bar on Mobile Devices */}
+      <MobileBottomNav
+        activeTab={activeTab}
+        onChangeTab={setActiveTab}
+        onOpenQrScanner={() => setIsQrScannerOpen(true)}
+      />
 
       {/* Login & Switch Profile Modal */}
       <LoginModal
@@ -205,6 +223,12 @@ const MainLayout: React.FC = () => {
         onOpenOsForTorno={handleOpenOsForTorno}
       />
 
+      {/* Share Link & QR Code Modal */}
+      <ShareAppModal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+      />
+
       {/* Permission Restriction Alert Modal */}
       {restrictedNotice && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-200">
@@ -220,7 +244,7 @@ const MainLayout: React.FC = () => {
 
             <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-[11px] text-slate-600 space-y-1">
               <p>Perfil atual: <strong className="text-amber-700">{currentUser.role}</strong> ({currentUser.nome})</p>
-              <p>Para acessar funções gerenciais, utilize uma conta com perfil <strong>Técnico de Manutenção</strong> ou <strong>Administrador</strong>.</p>
+              <p>Todas as rotinas operacionais (OS, Preventivas, Confiabilidade e Tornos) estão liberadas. Módulos de custos financeiros e controle de contas são exclusivos do <strong>Administrador</strong>.</p>
             </div>
 
             <div className="flex gap-2 pt-2">

@@ -5,14 +5,27 @@ export const SEED_USERS: { user: User; passwordHash: string }[] = [
     user: {
       id: 'USR-01',
       username: 'admin',
-      nome: 'Eng. Ricardo Mendes',
-      cargo: 'Coordenador de Manutenção e PCM',
+      nome: 'Administrador PCM Master',
+      cargo: 'Gerente Geral de Engenharia & PCM',
       role: 'Administrador',
-      email: 'ricardo.mendes@tornomaint.ind.br',
-      matricula: 'ADM-001',
-      avatar: 'RM'
+      email: 'admin@tornomaint.ind.br',
+      matricula: 'ADM-01',
+      avatar: 'AD'
     },
     passwordHash: 'admin123'
+  },
+  {
+    user: {
+      id: 'USR-ADM',
+      username: 'adm',
+      nome: 'Administrador (ADM)',
+      cargo: 'Administrador Geral PCM',
+      role: 'Administrador',
+      email: 'adm@tornomaint.ind.br',
+      matricula: 'ADM-00',
+      avatar: 'AD'
+    },
+    passwordHash: 'adm123'
   },
   {
     user: {

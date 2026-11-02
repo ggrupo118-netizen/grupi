@@ -7,10 +7,13 @@ import {
   Building2, 
   DollarSign, 
   Gauge, 
-  Wrench,
+  Wrench, 
   ShieldCheck, 
-  FileSpreadsheet
+  FileSpreadsheet,
+  Download,
+  FileCode
 } from 'lucide-react';
+import { downloadStandaloneHtml } from '../utils/exportHtmlFile';
 
 type ReportType = 
   | 'executivo' 
@@ -87,6 +90,17 @@ export const RelatoriosTab: React.FC = () => {
     document.body.removeChild(link);
   };
 
+  const handleExportHTML = () => {
+    downloadStandaloneHtml({
+      tornos,
+      ordens,
+      preventivas,
+      gastos,
+      currentUser,
+      globalReliability
+    }, `relatorio_manutencao_tornos_${activeReport}.html`);
+  };
+
   const todayStr = new Date().toLocaleDateString('pt-BR', {
     day: '2-digit',
     month: 'long',
@@ -113,6 +127,14 @@ export const RelatoriosTab: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={handleExportHTML}
+              className="bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold px-3 py-2 rounded-xl text-xs flex items-center gap-1.5 transition cursor-pointer shadow-xs"
+              title="Baixar arquivo HTML independente para abrir no navegador ou offline"
+            >
+              <FileCode className="w-4 h-4 text-amber-600" />
+              <span>Baixar Relatório HTML</span>
+            </button>
             <button
               onClick={handleExportCSV}
               className="bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 font-semibold px-3 py-2 rounded-xl text-xs flex items-center gap-1.5 transition cursor-pointer shadow-xs"

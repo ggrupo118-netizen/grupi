@@ -1,10 +1,4 @@
-export type UserRole = 
-  | 'Operador'
-  | 'Técnico de Manutenção'
-  | 'Administrador'
-  | 'PCM Gestor' 
-  | 'Mecânico Líder' 
-  | 'Operador de Torno';
+export type UserRole = 'Operador' | 'Técnico de Manutenção' | 'Administrador';
 
 export interface User {
   id: string;

@@ -219,8 +219,8 @@ export const GastosTab: React.FC = () => {
         </div>
 
         {/* 4 Quick Stat Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-1">
-          <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-xs">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 pt-1">
+          <div className="bg-white border border-slate-200 rounded-xl p-3 sm:p-3.5 shadow-xs">
             <span className="text-[11px] text-slate-500 font-bold uppercase tracking-wider block">Gasto Total Acumulado</span>
             <p className="text-xl font-black text-slate-900 mt-1">
               R$ {totalGasto.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
@@ -373,7 +373,82 @@ export const GastosTab: React.FC = () => {
           </span>
         </div>
 
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
+        {/* Mobile View: Cards with "rótulo: valor" (one card per expense) */}
+        <div className="md:hidden space-y-3">
+          {filteredGastos.length === 0 ? (
+            <div className="p-6 text-center text-slate-500 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+              Nenhum lançamento de gasto encontrado com os filtros selecionados.
+            </div>
+          ) : (
+            filteredGastos.map((g) => {
+              const torno = getTorno(g.tornoId);
+              return (
+                <div key={g.id} className="bg-slate-50/80 border border-slate-200 rounded-xl p-3.5 space-y-2">
+                  <div className="flex items-center justify-between gap-2 border-b border-slate-200/70 pb-2">
+                    <div>
+                      <span className="font-mono font-bold text-amber-700 text-xs block">{g.id}</span>
+                      <span className="text-[11px] text-slate-500">{g.data}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-black text-emerald-700 text-base">
+                        R$ {g.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      </span>
+                      <button
+                        onClick={() => {
+                          if (confirm(`Deseja remover o lançamento ${g.id} (R$ ${g.valor})?`)) {
+                            deleteGasto(g.id);
+                          }
+                        }}
+                        className="min-h-[44px] min-w-[44px] flex items-center justify-center text-rose-600 bg-rose-50 border border-rose-200 rounded-xl transition cursor-pointer"
+                        title="Excluir Despesa"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5 text-xs">
+                    <div className="flex justify-between items-center py-0.5">
+                      <span className="text-slate-500 font-medium">Torno:</span>
+                      <span className="font-bold text-slate-900">{torno.patrimonio} - {torno.modelo}</span>
+                    </div>
+                    <div className="flex justify-between items-center py-0.5">
+                      <span className="text-slate-500 font-medium">Categoria:</span>
+                      <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                        {g.categoria}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center py-0.5">
+                      <span className="text-slate-500 font-medium">Descrição:</span>
+                      <span className="text-slate-800 font-medium text-right">{g.descricao}</span>
+                    </div>
+                    <div className="flex justify-between items-center py-0.5">
+                      <span className="text-slate-500 font-medium">Fornecedor:</span>
+                      <span className="text-slate-700 font-medium">{g.fornecedor}</span>
+                    </div>
+                    {g.notaFiscal && (
+                      <div className="flex justify-between items-center py-0.5">
+                        <span className="text-slate-500 font-medium">Nota Fiscal:</span>
+                        <span className="font-mono text-slate-600 font-bold">{g.notaFiscal}</span>
+                      </div>
+                    )}
+                    {g.osId && (
+                      <div className="flex justify-between items-center py-0.5">
+                        <span className="text-slate-500 font-medium">OS Vinculada:</span>
+                        <span className="font-mono text-sky-800 font-bold bg-sky-50 px-1.5 py-0.5 rounded border border-sky-200">
+                          {g.osId}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Desktop View: Wide Table */}
+        <div className="hidden md:block overflow-x-auto rounded-lg border border-slate-200">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 uppercase tracking-wider font-semibold">
               <tr>

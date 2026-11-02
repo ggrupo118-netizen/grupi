@@ -86,7 +86,7 @@ export const MtbfMttrTab: React.FC = () => {
         </div>
 
         {/* 4 Core Scientific Metrics in White */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
           {/* MTBF */}
           <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between shadow-xs">
             <div>
@@ -208,7 +208,77 @@ export const MtbfMttrTab: React.FC = () => {
           </div>
         </div>
 
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
+        {/* Mobile View: Cards with "rótulo: valor" (one card per lathe) */}
+        <div className="md:hidden space-y-3">
+          {tornosReliability.map((item) => (
+            <div key={item.torno.id} className="bg-slate-50/80 border border-slate-200 rounded-xl p-3.5 space-y-2">
+              <div className="flex items-center justify-between gap-2 border-b border-slate-200/70 pb-2">
+                <div>
+                  <div className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                    <span className="font-mono text-amber-700">{item.torno.patrimonio}</span>
+                    <span>{item.torno.modelo}</span>
+                  </div>
+                  <div className="text-[11px] text-slate-500">{item.torno.setor} &bull; {item.torno.fabricante}</div>
+                </div>
+                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                  item.criticidade === 'Baixa' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                  item.criticidade === 'Média' ? 'bg-amber-50 text-amber-800 border border-amber-300' :
+                  'bg-rose-50 text-rose-700 border border-rose-200'
+                }`}>
+                  {item.criticidade}
+                </span>
+              </div>
+
+              <div className="space-y-1.5 text-xs">
+                <div className="flex justify-between items-center py-0.5">
+                  <span className="text-slate-500 font-medium">Disponibilidade:</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono font-black text-slate-900">{item.disponibilidade}%</span>
+                    <div className="w-16 bg-slate-200 h-1.5 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full ${
+                          item.disponibilidade >= 95 ? 'bg-emerald-500' :
+                          item.disponibilidade >= 85 ? 'bg-amber-500' : 'bg-rose-500'
+                        }`}
+                        style={{ width: `${Math.min(100, item.disponibilidade)}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex justify-between items-center py-0.5">
+                  <span className="text-slate-500 font-medium">MTBF (Confiabilidade):</span>
+                  <span className="font-mono font-bold text-sky-800 text-sm">{item.mtbf}h</span>
+                </div>
+
+                <div className="flex justify-between items-center py-0.5">
+                  <span className="text-slate-500 font-medium">MTTR (Reparo Médio):</span>
+                  <span className="font-mono font-bold text-amber-800 text-sm">{item.mttr}h</span>
+                </div>
+
+                <div className="flex justify-between items-center py-0.5">
+                  <span className="text-slate-500 font-medium">N° de Quebras:</span>
+                  <span className="font-bold text-slate-800">{item.numFalhas}</span>
+                </div>
+
+                <div className="flex justify-between items-center py-0.5">
+                  <span className="text-slate-500 font-medium">Horas Paradas / Operando:</span>
+                  <span className="font-mono text-slate-700">{item.horasReparo}h / {item.horasOperadas}h</span>
+                </div>
+
+                <div className="flex justify-between items-center py-0.5">
+                  <span className="text-slate-500 font-medium">Custo de Reparos:</span>
+                  <span className="font-mono font-bold text-slate-900">
+                    R$ {item.custoManutencao.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Desktop View: Wide Table */}
+        <div className="hidden md:block overflow-x-auto rounded-lg border border-slate-200">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 text-slate-600 uppercase tracking-wider font-semibold border-b border-slate-200">
               <tr>

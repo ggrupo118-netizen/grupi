@@ -54,9 +54,9 @@ export const GestaoOsTab: React.FC<GestaoOsTabProps> = ({ onOpenNewOs, onNavigat
   const concluidasCount = ordens.filter(o => o.status === 'Concluída').length;
 
   return (
-    <div className="space-y-4">
-      {/* Top summary badges in white */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+    <div className="space-y-4 w-full max-w-full overflow-x-hidden">
+      {/* Top summary badges: 2 columns on small screens, 4 on desktop */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3 w-full">
         <div className="bg-white border border-slate-200 rounded-xl p-3 flex items-center justify-between shadow-xs">
           <div>
             <span className="text-[11px] text-slate-500 font-bold uppercase">Total Emitidas</span>
@@ -87,66 +87,173 @@ export const GestaoOsTab: React.FC<GestaoOsTabProps> = ({ onOpenNewOs, onNavigat
         </div>
       </div>
 
-      {/* Filter and action toolbar */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap gap-3 items-center justify-between shadow-xs">
-        <div className="flex flex-wrap gap-2 items-center flex-1 min-w-[280px]">
-          <div className="relative flex-1 min-w-[200px]">
-            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+      {/* Filter and action toolbar - 1 column on mobile */}
+      <div className="bg-white border border-slate-200 rounded-xl p-3.5 sm:p-4 flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center justify-between shadow-xs w-full">
+        <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center flex-1 w-full">
+          {/* Search Input: text-base min-h-[44px] */}
+          <div className="relative w-full sm:w-auto sm:flex-1">
+            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Buscar por código, torno, solicitante, mecânico..."
-              className="w-full bg-white border border-slate-300 rounded-lg pl-8 pr-3 py-1.5 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-amber-500 shadow-xs"
+              placeholder="Buscar OS, torno, mecânico..."
+              className="w-full bg-white border border-slate-300 rounded-xl pl-10 pr-3.5 min-h-[44px] text-base text-slate-900 placeholder-slate-400 focus:outline-none focus:border-amber-500 shadow-xs"
             />
           </div>
 
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
-            className="bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 shadow-xs"
-          >
-            <option value="">Status: Todos</option>
-            <option value="Aberta">Aberta</option>
-            <option value="Em Andamento">Em Andamento</option>
-            <option value="Concluída">Concluída</option>
-            <option value="Cancelada">Cancelada</option>
-          </select>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 w-full sm:w-auto">
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              className="w-full bg-white border border-slate-300 rounded-xl px-3 min-h-[44px] text-base sm:text-xs text-slate-800 shadow-xs"
+            >
+              <option value="">Status: Todos</option>
+              <option value="Aberta">Aberta</option>
+              <option value="Em Andamento">Em Andamento</option>
+              <option value="Concluída">Concluída</option>
+              <option value="Cancelada">Cancelada</option>
+            </select>
 
-          <select
-            value={filterTipo}
-            onChange={(e) => setFilterTipo(e.target.value)}
-            className="bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 shadow-xs"
-          >
-            <option value="">Tipo: Todos</option>
-            <option value="Preventiva">Preventiva</option>
-            <option value="Corretiva">Corretiva</option>
-          </select>
+            <select
+              value={filterTipo}
+              onChange={(e) => setFilterTipo(e.target.value)}
+              className="w-full bg-white border border-slate-300 rounded-xl px-3 min-h-[44px] text-base sm:text-xs text-slate-800 shadow-xs"
+            >
+              <option value="">Tipo: Todos</option>
+              <option value="Preventiva">Preventiva</option>
+              <option value="Corretiva">Corretiva</option>
+            </select>
 
-          <select
-            value={filterTorno}
-            onChange={(e) => setFilterTorno(e.target.value)}
-            className="bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 shadow-xs"
-          >
-            <option value="">Todos os Tornos</option>
-            {tornos.map(t => (
-              <option key={t.id} value={t.id}>{t.patrimonio} - {t.modelo}</option>
-            ))}
-          </select>
+            <select
+              value={filterTorno}
+              onChange={(e) => setFilterTorno(e.target.value)}
+              className="w-full bg-white border border-slate-300 rounded-xl px-3 min-h-[44px] text-base sm:text-xs text-slate-800 shadow-xs"
+            >
+              <option value="">Todos os Tornos</option>
+              {tornos.map(t => (
+                <option key={t.id} value={t.id}>{t.patrimonio} - {t.modelo}</option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <button
           onClick={onOpenNewOs}
-          className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-3.5 py-1.5 rounded-lg text-xs flex items-center gap-1.5 transition shadow-xs cursor-pointer"
+          className="w-full sm:w-auto min-h-[44px] bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer shrink-0"
         >
           <Plus className="w-4 h-4" />
-          <span>Nova OS</span>
+          <span>Nova O.S.</span>
         </button>
       </div>
 
-      {/* OS Table */}
-      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
-        <div className="overflow-x-auto">
+      {/* OS Container */}
+      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs w-full">
+        {/* MOBILE VIEW (< md): Cartões individuais com linhas "rótulo: valor" */}
+        <div className="md:hidden divide-y divide-slate-100 w-full">
+          {filtered.length === 0 ? (
+            <p className="p-6 text-center text-slate-500 text-xs">Nenhuma ordem de serviço encontrada.</p>
+          ) : (
+            filtered.map((os) => {
+              const torno = getTorno(os.tornoId);
+              return (
+                <div key={os.id} className="p-4 space-y-3 w-full">
+                  {/* Card Header */}
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                    <div>
+                      <span className="font-mono font-bold text-amber-700 text-base">{os.id}</span>
+                      {os.paradaMaquina && (
+                        <span className="text-[10px] bg-rose-100 text-rose-800 font-bold px-2 py-0.5 rounded ml-2">
+                          MÁQUINA PARADA
+                        </span>
+                      )}
+                    </div>
+                    <select
+                      value={os.status}
+                      onChange={(e) => handleStatusChange(os, e.target.value as OsStatus)}
+                      className="bg-white border border-slate-300 text-xs min-h-[44px] text-slate-800 rounded-xl px-2.5 font-bold focus:outline-none focus:border-amber-500 shadow-xs"
+                    >
+                      <option value="Aberta">Aberta</option>
+                      <option value="Em Andamento">Em Andamento</option>
+                      <option value="Concluída">Concluída</option>
+                      <option value="Cancelada">Cancelada</option>
+                    </select>
+                  </div>
+
+                  {/* Linhas de "rótulo: valor" */}
+                  <div className="space-y-1.5 text-xs text-slate-700 w-full">
+                    <div className="flex justify-between py-1 border-b border-slate-50">
+                      <span className="text-slate-500 font-medium">Torno Mecânico:</span>
+                      <span className="font-semibold text-slate-900">{torno.patrimonio} - {torno.modelo}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-50">
+                      <span className="text-slate-500 font-medium">Tipo de OS:</span>
+                      <span className="font-semibold">{os.tipo}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-50">
+                      <span className="text-slate-500 font-medium">Prioridade:</span>
+                      <span className={`font-bold ${os.prioridade === 'Urgente' ? 'text-rose-700' : 'text-slate-800'}`}>{os.prioridade}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-50">
+                      <span className="text-slate-500 font-medium">Responsável:</span>
+                      <span className="text-slate-900">{os.responsavel}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-50">
+                      <span className="text-slate-500 font-medium">Data de Abertura:</span>
+                      <span className="font-mono text-slate-800">{os.dataAbertura}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-50">
+                      <span className="text-slate-500 font-medium">Prazo Previsto:</span>
+                      <span className="font-mono text-slate-800">{os.previsaoConclusao}</span>
+                    </div>
+                    <div className="pt-1">
+                      <span className="text-slate-500 font-medium block mb-1">Descrição do Chamado:</span>
+                      <p className="text-slate-800 bg-slate-50 p-2.5 rounded-xl border border-slate-100">{os.descricao}</p>
+                    </div>
+                    {os.horasTrabalhadas && (
+                      <div className="flex justify-between py-1 text-emerald-700 font-bold">
+                        <span className="text-slate-500 font-medium">Horas Trabalhadas:</span>
+                        <span>{os.horasTrabalhadas}h</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Card Actions - min-h-[44px] */}
+                  <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                    {os.status !== 'Concluída' && (
+                      <button
+                        onClick={() => setConcludeOs(os)}
+                        className="flex-1 min-h-[44px] bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-2 rounded-xl text-xs flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>Concluir O.S.</span>
+                      </button>
+                    )}
+                    <button
+                      onClick={() => onNavigateToReport(os.id)}
+                      className="flex-1 min-h-[44px] bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold px-3 py-2 rounded-xl text-xs flex items-center justify-center gap-1.5 transition border border-slate-200 cursor-pointer"
+                    >
+                      <Printer className="w-4 h-4 text-slate-600" />
+                      <span>Relatório</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (confirm(`Excluir ordem ${os.id}?`)) deleteOrdem(os.id);
+                      }}
+                      className="min-h-[44px] px-3.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl border border-rose-200 flex items-center justify-center transition"
+                      aria-label="Excluir OS"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* DESKTOP VIEW (>= md): Tabela completa */}
+        <div className="hidden md:block overflow-x-auto w-full">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 uppercase tracking-wider font-semibold">
               <tr>
@@ -242,19 +349,19 @@ export const GestaoOsTab: React.FC<GestaoOsTabProps> = ({ onOpenNewOs, onNavigat
                           )}
                           <button
                             onClick={() => onNavigateToReport(os.id)}
-                            className="p-1.5 rounded hover:bg-slate-100 text-sky-700 transition cursor-pointer"
-                            title="Ver Ficha / Imprimir OS"
+                            className="p-1.5 rounded hover:bg-slate-100 text-slate-600 transition cursor-pointer"
+                            title="Ver Relatório Técnico da O.S."
                           >
                             <Printer className="w-4 h-4" />
                           </button>
                           <button
                             onClick={() => {
-                              if (confirm(`Deseja excluir permanentemente a OS ${os.id}?`)) {
+                              if (confirm(`Deseja remover a ordem ${os.id}?`)) {
                                 deleteOrdem(os.id);
                               }
                             }}
-                            className="p-1.5 rounded hover:bg-rose-100 text-rose-600 transition cursor-pointer"
-                            title="Excluir OS"
+                            className="p-1.5 rounded hover:bg-rose-50 text-rose-600 transition cursor-pointer"
+                            title="Remover O.S."
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -269,12 +376,12 @@ export const GestaoOsTab: React.FC<GestaoOsTabProps> = ({ onOpenNewOs, onNavigat
         </div>
       </div>
 
-      {/* Conclude OS Modal */}
+      {/* Concluir OS Modal */}
       {concludeOs && (
         <ConcluirOsModal
+          isOpen={!!concludeOs}
           os={concludeOs}
           torno={getTorno(concludeOs.tornoId)}
-          isOpen={true}
           onClose={() => setConcludeOs(null)}
         />
       )}
